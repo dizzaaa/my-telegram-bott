@@ -1,16 +1,14 @@
 import sqlite3
 import re
-import pytz
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # --- Konfigurasi Master ---
 token = '8389389993:AAFBzImBYwxlo1uaCFnFG3RzMJ7gf8pUwwo'
 owner_username = '@cinnamoroiLi'
-group_log_id = -5151128223  
+group_log_id = -5151128223        # GRUP LOG (Master /done)
+group_member_id = -5246034154     # GRUP MEMBER & ADMIN
 channel_id = '@RekberEloise'
-time_zone = pytz.timezone('Asia/Jakarta')
 
 def init_db():
     conn = sqlite3.connect('cinnabot_pro.db')
@@ -23,122 +21,119 @@ def init_db():
     conn.commit()
     conn.close()
 
-async def cek_member_channel(user_id, context):
-    try:
-        member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception:
-        return False
-
-def menu_utama(is_master=False):
-    kbd = [
-        [InlineKeyboardButton("☁️ Menu Absen", callback_data='menu_absen')],
-        [InlineKeyboardButton("💰 Cek Poin", callback_data='cek_poin'), InlineKeyboardButton("📊 Progress BBC", callback_data='cek_bbc')],
-        [InlineKeyboardButton("🏆 Leaderboard", callback_data='leaderboard')]
-    ]
-    return InlineKeyboardMarkup(kbd)
-
-# --- Handler Utama ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if update.effective_chat.type == 'private':
-        conn = sqlite3.connect('cinnabot_pro.db')
-        conn.execute("insert or ignore into absen_status (user_id, username) values (?,?)", (user.id, user.username))
-        conn.commit(); conn.close()
-        await update.message.reply_text(f"Hellow Master {user.first_name}! 🩵\nSiap setor absen hari ini? 🧁", 
-                                       reply_markup=menu_utama(f"@{user.username}" == owner_username))
-
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.data == 'menu_absen':
-        kbd = [[InlineKeyboardButton("Senin ☁️", callback_data='m_senin')],
-               [InlineKeyboardButton("Jumat 📸", callback_data='m_jumat')],
-               [InlineKeyboardButton("Minggu 🔗", callback_data='m_minggu')],
-               [InlineKeyboardButton("🔙 Kembali", callback_data='back')]]
-        await q.edit_message_text("Pilih jadwal absenmu manis: 🩵", reply_markup=InlineKeyboardMarkup(kbd))
-    elif q.data == 'back':
-        context.user_data['mode'] = None
-        await q.edit_message_text("Main Menu 🩵💭", reply_markup=menu_utama(f"@{q.from_user.username}" == owner_username))
-    elif q.data.startswith('m_'):
-        mode = q.data.replace('m_', '')
-        context.user_data['mode'] = mode
-        await q.edit_message_text(f"Mode {mode.capitalize()} aktif! 🩵\nKirim datanya sekarang ya...", 
-                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Batal", callback_data='back')]]))
-
-# --- Jalur Master (Grup Log) ---
-async def group_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != group_log_id: return
+# --- JALUR 1: LOGIKA GRUP LOG (-5151128223) ---
+async def handle_log_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    
-    if text and text.startswith("/done") and update.message.reply_to_message:
-        caption = update.message.reply_to_message.caption or ""
-        u_id_search = re.search(r'ID: `(\d+)`', caption)
-        if u_id_search:
-            tid = int(u_id_search.group(1))
+    if not text: return
+
+    # FITUR /DONE MASTER
+    if text.startswith("/done") and update.message.reply_to_message:
+        cap = update.message.reply_to_message.caption or ""
+        match = re.search(r'ID: `(\d+)`', cap)
+        if match:
+            tid = int(match.group(1))
             conn = sqlite3.connect('cinnabot_pro.db')
             conn.execute("update absen_status set points=points+50, jumat=1 where user_id=?", (tid,))
             res = conn.execute("select senin, jumat, minggu, username from absen_status where user_id=?", (tid,)).fetchone()
             conn.commit(); conn.close()
             
-            notif = (f"Jaseb Jumat kamu sudah di-done Master! 🩵\n\n"
-                     f"Senin: {'✅' if res[0] else '❌'}\n"
-                     f"Jumat: ✅\nMinggu: {'✅' if res[2] else '❌'}\n\n"
-                     f"Makin rajin ya @{res[3]}! 🧁🍭")
+            notif = f"Yeay! Jaseb Jumat kamu sudah di-done Master! 🩵\n\nSenin: {'✅' if res[0] else '❌'}\nJumat: ✅\nMinggu: {'✅' if res[2] else '❌'}\n\nSemangat @{res[3]}! 🧁"
             await context.bot.send_message(chat_id=tid, text=notif)
-            await update.message.reply_text(f"Absen @{res[3]} sukses di-konfirmasi! ✅")
+            await update.message.reply_text(f"Berhasil konfirmasi @{res[3]}! ✅")
+            return
 
-# --- Jalur Private (Member) ---
-async def private_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != 'private': return
+    # FITUR BALAS CHAT MEMBER (FORWARD)
+    if update.message.reply_to_message and "ID:" in update.message.reply_to_message.text:
+        match = re.search(r'ID: `(\d+)`', update.message.reply_to_message.text)
+        if match:
+            tid = int(match.group(1))
+            msg = f"Hellow manis! 🍭 Ada pesan dari Master {owner_username}:\n\n💭: \"{text}\"\n\nLucu banget kan? Hehe 🩵☁️"
+            await context.bot.send_message(chat_id=tid, text=msg)
+            await update.message.reply_text("Pesan sudah Cinna sampaikan! 🐾")
+
+# --- JALUR 2: LOGIKA GRUP MEMBER (-5246034154) ---
+async def handle_member_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text: return
+
+    # ADMIN CEK ABSENSI
+    if text.startswith("/absensi") and update.message.reply_to_message:
+        target = update.message.reply_to_message.from_user
+        conn = sqlite3.connect('cinnabot_pro.db')
+        res = conn.execute("select senin, jumat, minggu, points, warning from absen_status where user_id=?", (target.id,)).fetchone()
+        conn.close()
+        
+        if res:
+            msg = (f"📝 **Status Absen @{target.username}**\n\n"
+                   f"Senin: {'✅' if res[0] else '❌'}\n"
+                   f"Jumat: {'✅' if res[1] else '❌'}\n"
+                   f"Minggu: {'✅' if res[2] else '❌'}\n\n"
+                   f"Poin: {res[3]} | SP: {res[4]}")
+            kbd = [[InlineKeyboardButton("📊 Cek BBC", callback_data=f"check_bbc_{target.id}")],
+                   [InlineKeyboardButton("☁️ Tanya Master", callback_data=f"ask_master_{target.id}")]]
+            await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kbd), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("User ini belum terdaftar di sistem Cinna ☁️")
+
+# --- JALUR 3: PRIVATE CHAT ---
+async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text
     mode = context.user_data.get('mode')
 
-    # Audit Senin/Minggu (Wajib Join Channel & 1 Bubble)
-    if mode in ['senin', 'minggu'] and text:
-        is_joined = await cek_member_channel(user.id, context)
-        if not is_joined:
-            return await update.message.reply_text(f"Eits! Join dulu ke channel {channel_id} baru bisa absen manis! 😾☁️")
+    if text == "🏆 leaderboard":
+        conn = sqlite3.connect('cinnabot_pro.db')
+        top = conn.execute("select username, points from absen_status order by points desc limit 5").fetchall()
+        conn.close()
+        msg = "🏆 **TOP 5 LEADERBOARD**\n\n" + "\n".join([f"{i+1}. @{u[0]} - {u[1]} pts" for i, u in enumerate(top)])
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    
+    elif text == "💰 cek poin":
+        conn = sqlite3.connect('cinnabot_pro.db')
+        res = conn.execute("select points, warning from absen_status where user_id=?", (user.id,)).fetchone()
+        conn.close()
+        await update.message.reply_text(f"Poin Master: {res[0] if res else 0} 💰\nSP: {res[1] if res else 0} ⚠️")
 
-        finds = re.findall(r'@\w+' if mode == 'senin' else r'http[s]?://\S+', text)
-        req = 25 if mode == 'senin' else 20
-        if len(finds) >= req:
-            conn = sqlite3.connect('cinnabot_pro.db')
-            for f in finds:
-                dupe = conn.execute("select user_id from used_data where content=?", (f,)).fetchone()
-                if dupe and dupe[0] != user.id:
-                    conn.execute("update absen_status set warning=warning+1, points=points-50 where user_id=?", (user.id,))
-                    conn.commit(); conn.close()
-                    return await update.message.reply_text("Duplikat terdeteksi! Kamu dapet SP 🟡")
-            
-            for f in finds: conn.execute("insert or replace into used_data values (?,?)", (f, user.id))
-            conn.execute(f"update absen_status set points=points+50, {mode}=1 where user_id=?", (user.id,))
-            conn.commit(); conn.close()
-            context.user_data['mode'] = None
-            await context.bot.send_message(chat_id=group_log_id, text=f"Lapor! @{user.username} absen {mode} lengkap (1 bubble) ✅")
-            return await update.message.reply_text(f"Absen {mode} berhasil! 🩵🍭")
-        else:
-            return await update.message.reply_text(f"Kurang manis! Wajib {req} data dlm 1 bubble! ☁️")
+    elif text == "☁️ menu absen":
+        kbd = [[InlineKeyboardButton("Senin ☁️", callback_data='m_senin')],
+               [InlineKeyboardButton("Jumat 📸", callback_data='m_jumat')],
+               [InlineKeyboardButton("Minggu 🔗", callback_data='m_minggu')]]
+        await update.message.reply_text("Pilih menu absen kamu: 🩵", reply_markup=InlineKeyboardMarkup(kbd))
 
-    # Foto Jumat
-    if mode == 'jumat' and update.message.photo:
-        await context.bot.send_photo(chat_id=group_log_id, photo=update.message.photo[-1].file_id, 
-                                     caption=f"Jaseb Jumat: @{user.username}\nID: `{user.id}`\nMaster reply /done 💭")
-        context.user_data['mode'] = None
-        return await update.message.reply_text("Jaseb terkirim ke Master! 🩵🧁")
-
-    # BBC Counter
-    if text and not mode and ("http" in text or "@" in text):
+    # BBC Counter Otomatis di PM
+    if text and not mode and ("@" in text or "http" in text):
         conn = sqlite3.connect('cinnabot_pro.db')
         conn.execute("update absen_status set bbc_count=bbc_count+1 where user_id=?", (user.id,))
         conn.commit(); conn.close()
 
+# --- HANDLER FOTO ---
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != 'private': return
+    if context.user_data.get('mode') == 'jumat':
+        await context.bot.send_photo(chat_id=group_log_id, photo=update.message.photo[-1].file_id, 
+                                     caption=f"Jaseb Jumat: @{update.effective_user.username}\nID: `{update.effective_user.id}`\nMaster reply /done 💭")
+        context.user_data['mode'] = None
+        await update.message.reply_text("Jaseb terkirim ke Master! 🧁")
+
+# --- MAIN RUNNER ---
 if __name__ == '__main__':
     init_db()
     app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.Chat(group_log_id), group_handler))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_handler))
+    
+    # 1. Callback (Tombol)
+    app.add_handler(CallbackQueryHandler(handle_callback)) # Fungsi handle_callback tetap sama
+    
+    # 2. Grup Log Handler
+    app.add_handler(MessageHandler(filters.Chat(group_log_id) & filters.TEXT, handle_log_group))
+    
+    # 3. Grup Member Handler
+    app.add_handler(MessageHandler(filters.Chat(group_member_id) & filters.TEXT, handle_member_group))
+    
+    # 4. Private Handler
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_private))
+    
+    # 5. Start Command
+    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Hellow!", reply_markup=ReplyKeyboardMarkup([[KeyboardButton("☁️ menu absen"), KeyboardButton("💰 cek poin")], [KeyboardButton("🏆 leaderboard")]], resize_keyboard=True)) if u.effective_chat.type == 'private' else None))
+
     app.run_polling()
