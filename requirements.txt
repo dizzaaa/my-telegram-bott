@@ -1,4 +1,2 @@
-python-telegram-bot[job-queue]
+python-telegram-bot==20.7
 pytz
-Pillow
-pytesseract
