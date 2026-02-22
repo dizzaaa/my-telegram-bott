@@ -15,11 +15,11 @@ from telegram.ext import (
 
 # ================= CONFIG =================
 
-TOKEN = "8389389993:AAFBzImBYwxlo1uaCFnFG3RzMJ7gf8pUwwo"
+TOKEN = "8389389993:AAHFz3HbVQeuWKmQFkVDvjmJVNTqkWx9Wn0"
 CHANNEL_USERNAME = "@RekberEloise"
 CHANNEL_ID = -1001946813667
 UANG_DONE_GROUP_ID = -5151128223
-OWNER_USERNAME = "@cinnamoroiLi"
+OWNER_USERNAME = "cinnamoroiLi"  
 
 TIMEZONE = pytz.timezone("Asia/Jakarta")
 
@@ -47,14 +47,14 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS used_usernames (
     username TEXT PRIMARY KEY,
     used_by INTEGER,
-    used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    used_at TEXT DEFAULT CURRENT_TIMESTAMP
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS join_logs (
     username TEXT PRIMARY KEY,
-    join_time TIMESTAMP
+    join_time TEXT
 )
 """)
 
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS weekly_archive (
     jumat INTEGER,
     minggu INTEGER,
     points INTEGER,
-    archived_at TIMESTAMP
+    archived_at TEXT
 )
 """)
 
@@ -75,30 +75,37 @@ db.commit()
 # ================= UTIL =================
 
 def get_calling_name(username: str):
-    if username == OWNER_USERNAME:
+    if not username:
+        return "Paw paw cinnamoon!"
+    if username.lower() == OWNER_USERNAME.lower():
         return "Master 👑"
     return "Paw paw cinnamoon!"
 
 def save_user(user):
+    if not user.username:
+        return
     cursor.execute(
         "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-        (user.id, user.username)
+        (user.id, user.username.lower())
     )
     db.commit()
 
 async def log_activity(context: ContextTypes.DEFAULT_TYPE, text: str):
-    await context.bot.send_message(UANG_DONE_GROUP_ID, text)
+    try:
+        await context.bot.send_message(UANG_DONE_GROUP_ID, text)
+    except:
+        pass
 
 # ================= JOIN TRACKER =================
 
 async def track_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     member = update.chat_member
     if member.new_chat_member.status == "member":
-        username = member.new_chat_member.user.username
-        if username:
+        user = member.new_chat_member.user
+        if user.username:
             cursor.execute(
-                "INSERT OR REPLACE INTO join_logs (username, join_time) VALUES (?, ?)",
-                (username.lower(), datetime.now(TIMEZONE).isoformat())
+                "INSERT OR REPLACE INTO join_logs VALUES (?, ?)",
+                (user.username.lower(), datetime.now(TIMEZONE).isoformat())
             )
             db.commit()
 
@@ -106,6 +113,11 @@ async def track_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cek_absen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+
+    if not user.username:
+        await update.message.reply_text("Kamu harus punya username Telegram dulu.")
+        return
+
     save_user(user)
 
     cursor.execute(
@@ -114,18 +126,16 @@ async def cek_absen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     data = cursor.fetchone()
 
-    senin = "✅" if data[0] else "⛔️"
-    jumat = "✅" if data[1] else "⛔️"
-    minggu = "✅" if data[2] else "⛔️"
+    if not data:
+        await update.message.reply_text("Belum ada data.")
+        return
 
     text = f"""
 Halo @{user.username} 💭
 
-Status absen kamu:
-
-Senin  : {senin}
-Jumat  : {jumat}
-Minggu : {minggu}
+Senin  : {"✅" if data[0] else "❌"}
+Jumat  : {"✅" if data[1] else "❌"}
+Minggu : {"✅" if data[2] else "❌"}
 
 Total Poin: {data[3]} ✨
 """
@@ -136,11 +146,15 @@ Total Poin: {data[3]} ✨
 async def handle_senin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TIMEZONE)
 
-    # hanya bisa kirim hari Senin
     if now.weekday() != 0:
         return
 
     user = update.effective_user
+
+    if not user.username:
+        await update.message.reply_text("Kamu harus punya username Telegram.")
+        return
+
     save_user(user)
 
     lines = update.message.text.strip().split("\n")
@@ -171,9 +185,12 @@ async def handle_senin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not row:
             errors.append(f"{u} bukan member baru.")
         else:
-            join_time = datetime.fromisoformat(row[0])
-            if now - join_time > timedelta(days=1):
-                errors.append(f"{u} lebih dari 1 hari.")
+            try:
+                join_time = datetime.fromisoformat(row[0])
+                if now - join_time > timedelta(days=1):
+                    errors.append(f"{u} lebih dari 1 hari.")
+            except:
+                errors.append(f"{u} error waktu join.")
 
     if errors:
         await update.message.reply_text(
@@ -184,7 +201,7 @@ async def handle_senin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for u in usernames:
         uname = u.replace("@", "")
         cursor.execute(
-            "INSERT INTO used_usernames (username, used_by) VALUES (?, ?)",
+            "INSERT INTO used_usernames VALUES (?, ?, CURRENT_TIMESTAMP)",
             (uname, user.id)
         )
 
@@ -199,10 +216,7 @@ async def handle_senin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🎉 25 Username valid!\nPoin +50 ✨")
 
-    await log_activity(
-        context,
-        f"{user.username} berhasil absen Senin +50 poin"
-    )
+    await log_activity(context, f"{user.username} absen Senin +50 poin")
 
 # ================= LEADERBOARD =================
 
@@ -224,54 +238,33 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def weekly_reset(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TIMEZONE)
 
-    if now.weekday() == 0:  # Senin
-        logging.info("Weekly reset berjalan")
-
-        cursor.execute("SELECT * FROM users")
-        users = cursor.fetchall()
-
-        for user in users:
-            cursor.execute("""
-                INSERT INTO weekly_archive
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (*user, now.isoformat()))
-
-        # reset absen
-        cursor.execute("""
-        UPDATE users
-        SET senin=0,
-            jumat=0,
-            minggu=0
-        """)
-
-        # reset username yang pernah dipakai
-        cursor.execute("DELETE FROM used_usernames")
-
-        db.commit()
-
-        await context.bot.send_message(
-            UANG_DONE_GROUP_ID,
-            "🔄 Reset mingguan selesai.\nData minggu lalu sudah diarsipkan."
-        )
-
-# ================= REMINDER =================
-
-async def reminder(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now(TIMEZONE)
+    # reset hanya Senin jam 00:00
     if now.weekday() != 0:
         return
 
-    cursor.execute("SELECT user_id, username FROM users WHERE senin=0")
+    logging.info("Weekly reset berjalan")
+
+    cursor.execute("SELECT * FROM users")
     users = cursor.fetchall()
 
-    for user_id, username in users:
-        try:
-            await context.bot.send_message(
-                user_id,
-                f"Halo @{username} 🌙\n5 jam lagi absen Senin ditutup!"
-            )
-        except:
-            pass
+    for user in users:
+        cursor.execute(
+            "INSERT INTO weekly_archive VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (*user, now.isoformat())
+        )
+
+    cursor.execute("UPDATE users SET senin=0, jumat=0, minggu=0")
+    cursor.execute("DELETE FROM used_usernames")
+
+    db.commit()
+
+    try:
+        await context.bot.send_message(
+            UANG_DONE_GROUP_ID,
+            "🔄 Reset mingguan selesai."
+        )
+    except:
+        pass
 
 # ================= MAIN =================
 
@@ -281,25 +274,14 @@ def main():
     app.add_handler(ChatMemberHandler(track_join, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(CommandHandler("cek", cek_absen))
     app.add_handler(CommandHandler("leaderboard", leaderboard))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_senin))
 
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_senin
-    ))
-
-    # reset tiap hari jam 00:00 (akan jalan hanya jika Senin)
     app.job_queue.run_daily(
         weekly_reset,
         time=time(0, 0, tzinfo=TIMEZONE)
     )
 
-    # reminder jam 19:00 WIB
-    app.job_queue.run_daily(
-        reminder,
-        time=time(19, 0, tzinfo=TIMEZONE)
-    )
-
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
